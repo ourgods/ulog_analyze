@@ -1,9 +1,9 @@
 ---
 name: inspect-px4-ulog
-description: Use the bundled ulog-tool CLI to inspect, extract, plot, compare parameters and signals, calculate statistics, spectra, transfer functions and coherence, resolve primary IMU instances, and check system health from PX4 ULog files. Use when Codex needs PX4 ULog topics, fields, metadata, parameter changes, windows, aligned signals, trends, plots, oscillation frequencies, vibration, resource warnings, or multi-log comparisons. Prefer reusable CLI commands and recipes over one-off parsing scripts.
+description: Use the bundled ulog-tool CLI to inspect, extract, plot, compare parameters and signals, calculate statistics, spectra, transfer functions and coherence, resolve primary IMU instances, and check system health from PX4 .ulg files in the ULog format. Use when Codex needs PX4 .ulg topics, fields, metadata, parameter changes, windows, aligned signals, trends, plots, oscillation frequencies, vibration, resource warnings, or multi-log comparisons. Prefer reusable CLI commands and recipes over one-off parsing scripts.
 ---
 
-# PX4 ULog Tool
+# PX4 .ulg Log Tool
 
 Use `scripts/ulog_tool.py`. It is a data-access and signal-calculation tool, not a root-cause engine. Select the signals and windows required by the user's question; explain causes only from the resulting measurements.
 

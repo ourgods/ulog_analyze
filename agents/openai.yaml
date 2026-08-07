@@ -1,4 +1,4 @@
 interface:
-  display_name: "PX4 ULog Tool"
-  short_description: "Inspect PX4 ULog signals, IMUs, spectra, and control response"
-  default_prompt: "Use $inspect-px4-ulog to inspect or compare PX4 ULog signals, parameters, primary IMUs, spectra, transfer response, and system health."
+  display_name: "PX4 .ulg Log Tool"
+  short_description: "Inspect PX4 .ulg signals, IMUs, spectra, and control response"
+  default_prompt: "Use $inspect-px4-ulog to inspect or compare PX4 .ulg signals, parameters, primary IMUs, spectra, transfer response, and system health."
