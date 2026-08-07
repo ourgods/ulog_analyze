@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Local PX4 logs and generated analysis data
+*.ulg
+*.ulog
+flight_index.json
+out/
+plots/
+

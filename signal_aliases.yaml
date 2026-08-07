@@ -1,0 +1,9 @@
+aliases:
+  hawkeye_vertical_speed:
+    expression: "-vehicle_local_position.vz"
+    unit: "m/s"
+    positive_direction: "up"
+  gps_vertical_speed:
+    expression: "-vehicle_gps_position.vel_d_m_s"
+    unit: "m/s"
+    positive_direction: "up"
