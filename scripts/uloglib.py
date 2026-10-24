@@ -9,6 +9,7 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
+from scipy import signal as scipy_signal
 from pyulog import ULog
 
 
@@ -323,16 +324,57 @@ def _linear_bridge_limit_s(time_s: np.ndarray, gap_factor: float) -> float:
     return gap_factor * median_dt
 
 
+def anti_alias_samples(time_s: np.ndarray, values: np.ndarray, target_hz: float) -> np.ndarray:
+    """Apply a low-pass before decimation, separately across logging gaps.
+
+    A nonuniform source is rejected rather than silently filtering it at a
+    fictitious constant sample rate.
+    """
+    if target_hz <= 0 or not np.isfinite(target_hz):
+        raise ValueError("target_hz must be positive and finite")
+    if len(time_s) < 2:
+        return values
+    dt = np.diff(time_s)
+    positive = dt[dt > 0]
+    if not len(positive):
+        raise ValueError("anti-aliasing requires increasing timestamps")
+    period = float(np.median(positive))
+    source_hz = 1.0 / period
+    if source_hz <= target_hz * 1.1:
+        return values
+    regular_dt = positive[positive <= period * 5]
+    if np.any(abs(regular_dt - period) > .10 * period):
+        raise ValueError("cannot anti-alias irregularly sampled source safely; select a native source/window")
+    sos = scipy_signal.butter(6, target_hz * .4, fs=source_hz,
+                              btype="lowpass", output="sos")
+    filtered = values.copy()
+    cuts = np.r_[0, np.flatnonzero(dt > period * 5) + 1, len(values)]
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        if b-a < 25:
+            raise ValueError("too few contiguous samples for anti-aliasing")
+        filtered[a:b] = scipy_signal.sosfiltfilt(sos, values[a:b])
+    return filtered
+
+
 def resample_series(
     series: Series,
     grid_s: Sequence[float],
     *,
     max_linear_gap_factor: float = 5.0,
+    anti_alias: bool = False,
 ) -> np.ndarray:
     """Align one series without extrapolation or interpolation across dropouts."""
 
     grid = np.asarray(grid_s, dtype=np.float64)
     time, values = _clean_for_resample(series.time_s, series.values)
+    if anti_alias and series.spec.interpolation == "linear" and len(grid) >= 2:
+        step = np.diff(grid)
+        if np.any(step <= 0) or not np.all(np.isfinite(step)):
+            raise ValueError("anti-aliasing requires increasing output timestamps")
+        period = float(np.median(step))
+        if np.max(np.abs(step-period)) > .001*period:
+            raise ValueError("anti-aliasing requires a uniform output grid")
+        values = anti_alias_samples(time, values, 1.0/period)
     output = np.full(len(grid), np.nan, dtype=np.float64)
     if not np.isfinite(max_linear_gap_factor) or max_linear_gap_factor <= 0:
         raise ValueError("max_linear_gap_factor must be finite and positive")
@@ -370,6 +412,7 @@ def align_signals(
     end_s: float | None = None,
     hz: float = 10.0,
     on_missing: str = "error",
+    anti_alias: bool = False,
 ) -> AlignedSignals:
     """Crop and align scalar fields on a common grid."""
 
@@ -400,7 +443,7 @@ def align_signals(
         raise ValueError(f"empty common time range: {common_start}..{common_end}s")
     step = 1.0 / hz
     grid = np.arange(common_start, common_end + step * 0.25, step)
-    values = {label: resample_series(series, grid) for label, series in source.items()}
+    values = {label: resample_series(series, grid, anti_alias=anti_alias) for label, series in source.items()}
     sampling = {label: sampling_info(series.time_s) for label, series in source.items()}
     return AlignedSignals(time_s=grid, values=values, source=source, sampling=sampling, missing=tuple(missing))
 
