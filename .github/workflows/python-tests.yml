@@ -1,0 +1,25 @@
+name: Python tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install numpy scipy pyulog matplotlib
+      - name: Compile sources
+        run: python -m compileall -q scripts tests
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
