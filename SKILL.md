@@ -5,7 +5,7 @@ description: Use the bundled ulog-tool CLI to inspect, extract, plot, compare pa
 
 # PX4 .ulg Log Tool
 
-Use `scripts/ulog_tool.py`. It is a data-access and signal-calculation tool, not a root-cause engine. Select the signals and windows required by the user's question; explain causes only from the resulting measurements.
+Use `scripts/ulog_tool.py`. It is strictly a data-access and signal-calculation tool, not a root-cause engine. Only read, extract, validate, calculate and report observed data. Do not encode fixed diagnostic decisions, root-cause inferences, stability ratings, or tuning recommendations in this Skill. The caller is responsible for interpretation.
 
 `@primary` is currently supported only for `vehicle_imu_status`, for example `vehicle_imu_status@primary.gyro_vibration_metric`. It resolves the PX4-selected device from `sensors_status_imu` and reports the resolution in metadata. It rejects a window containing IMU failover rather than silently selecting the last primary; split that window or use an explicit `@INSTANCE`. Never compare `vehicle_imu_status@0` across logs without checking `recipe vibration` first.
 
@@ -121,3 +121,25 @@ python scripts/ulog_tool.py health log89.ulg --max-file-mib 128
 Use `transfer` for gain, phase, and coherence between aligned cause/effect signals. Supply one or more `--at-hz` frequencies. It rejects any requested grid faster than the slowest source by default; choose a lower `--rate`, or use `--allow-upsampling` only when you accept that interpolation adds no bandwidth. It always limits `--at-hz` below the raw-source Nyquist. Treat transfer as compatibility evidence only: cross-spectrum and coherence do not establish causality. Choose windows by flight mode or setpoint phase; do not combine a trajectory transition and a settled hold into one RMS or transfer estimate.
 
 Use temporary code only when the requested operation cannot be expressed with these commands. Keep that code outside the Skill and state why the CLI was insufficient.
+
+## Native samples and objective events
+
+Use these when a downsampled topic might hide short transients or alias high-frequency energy:
+
+```powershell
+python scripts/ulog_tool.py native LOG.ulg --topic sensor_gyro --instance 0 --field x --field y --field z --sample-timestamp --output gyro_native.csv
+python scripts/ulog_tool.py fifo LOG.ulg --topic sensor_gyro_fifo --instance 0 --anchor last --output gyro_fifo.csv
+python scripts/ulog_tool.py timeline LOG.ulg -s vehicle_status.nav_state -s vehicle_land_detected.landed
+python scripts/ulog_tool.py recipe motors LOG.ulg --airborne
+python scripts/ulog_tool.py recipe gps-ekf LOG.ulg --airborne
+```
+
+FIFO packet samples use the per-packet `samples`, `dt` (microseconds) and `scale` values. The packet's `timestamp_sample` convention is driver dependent: choose `--anchor first` or `last` after verifying the source firmware. Do not automatically treat packet timestamps as one uniformly sampled physical signal. Output timestamps are log-relative.
+
+`spectrum` and `transfer` apply low-pass anti-alias filtering before downsampling continuous signals; if source timestamps are too irregular, they refuse the operation instead of inventing bandwidth. Use `native` or `fifo` when the original sample stream is needed. Never infer an original high-frequency spectrum from a low-rate topic such as `sensor_gyro` logged at 1 Hz. Discrete state values are never anti-aliased.
+
+`motors` discovers every recorded motor control slot (including the fifth and sixth motor on a hexacopter); `gps-ekf` includes N/E horizontal data and available innovations. Missing or all-NaN fields are reported explicitly.
+
+`timeline` records actual observed state changes and their timestamps; it does not classify flight quality or infer why the change occurred.
+
+When reporting any frequency-band percentage, distinguish integrated PSD/mean-square power shares from RMS-amplitude shares, and name the denominator. No inferred control or diagnostic conclusions belong in the Skill itself.
