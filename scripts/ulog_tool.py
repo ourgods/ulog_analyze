@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from fifo_tools import decode_fifo
 from flight_catalog import CORE_TOPICS, build_record, quality_summary
 from signal_tools import at_frequency, band_rms, transfer_function, welch_peak
 from uloglib import (
@@ -1355,6 +1356,72 @@ def command_recipe(args: argparse.Namespace) -> None:
     print_or_write(payload, args.output)
 
 
+
+def command_fifo(args: argparse.Namespace) -> None:
+    """Export selected raw FIFO packets as physical-unit, native-rate samples."""
+    if args.topic not in {"sensor_accel_fifo", "sensor_gyro_fifo"}:
+        raise ValueError("topic must be sensor_accel_fifo or sensor_gyro_fifo")
+    check_file_size(args.log, args.max_file_mib)
+    log = load_topics(args.log, {args.topic})
+    data = get_topic(log, args.topic, args.instance)
+    decoded = decode_fifo(data, log.start_timestamp, anchor=args.anchor)
+    time_s = decoded["time_s"]
+    mask = np.isfinite(time_s)
+    if args.start is not None:
+        mask &= time_s >= args.start
+    if args.end is not None:
+        mask &= time_s <= args.end
+    if not np.any(mask):
+        raise ValueError("no decoded FIFO samples in selected window")
+    with args.output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("time_s", "x", "y", "z"))
+        writer.writerows(zip(*(decoded[key][mask] for key in ("time_s", "x", "y", "z"))))
+    print_or_write({
+        "file": args.log.name,
+        "topic": args.topic,
+        "instance": args.instance,
+        "timestamp_anchor": args.anchor,
+        "units": "m/s^2" if args.topic == "sensor_accel_fifo" else "rad/s",
+        "file_written": str(args.output),
+        "samples_written": int(np.sum(mask)),
+        "source_packets": decoded["packets"],
+        "duplicate_sample_times": decoded["duplicate_sample_times"],
+        "effective_window_s": [float(time_s[mask][0]), float(time_s[mask][-1])],
+        "sampling": sampling_info(time_s[mask]),
+    }, None)
+
+
+def command_native(args: argparse.Namespace) -> None:
+    """Export original scalar topic records, without time alignment or interpolation."""
+    check_file_size(args.log, args.max_file_mib)
+    log = load_topics(args.log, {args.topic})
+    data = get_topic(log, args.topic, args.instance)
+    fields = args.fields
+    absent = [name for name in fields if name not in data]
+    if absent:
+        raise KeyError(f"missing fields in {args.topic}[{args.instance}]: {absent}")
+    time_field = "timestamp_sample" if args.sample_timestamp and "timestamp_sample" in data else "timestamp"
+    time_s = np.asarray(data[time_field], dtype=np.float64) / 1e6 - log.start_timestamp / 1e6
+    mask = np.isfinite(time_s)
+    if args.start is not None:
+        mask &= time_s >= args.start
+    if args.end is not None:
+        mask &= time_s <= args.end
+    if not np.any(mask):
+        raise ValueError("no original topic samples in selected window")
+    with args.output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time_s", *fields])
+        writer.writerows(zip(time_s[mask], *(np.asarray(data[name])[mask] for name in fields)))
+    print_or_write({
+        "file": args.log.name, "topic": args.topic, "instance": args.instance,
+        "time_field": time_field, "interpolated": False,
+        "file_written": str(args.output), "samples_written": int(np.sum(mask)),
+        "sampling": sampling_info(time_s[mask]),
+    }, None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Reusable, selective PX4 ULog inspection and signal analysis")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1447,6 +1514,32 @@ def build_parser() -> argparse.ArgumentParser:
     spectrum.add_argument("--min-segments", type=int, default=4)
     spectrum.add_argument("--output")
     spectrum.set_defaults(func=command_spectrum, anti_alias=True)
+
+
+    fifo = sub.add_parser("fifo", help="export native samples from sensor_accel_fifo or sensor_gyro_fifo")
+    fifo.add_argument("log", type=Path)
+    fifo.add_argument("--topic", choices=("sensor_accel_fifo", "sensor_gyro_fifo"), required=True)
+    fifo.add_argument("--instance", type=int, default=0)
+    fifo.add_argument("--anchor", choices=("first", "last"), required=True,
+                      help="interpret timestamp_sample as packet's first or last sample; verify driver convention")
+    fifo.add_argument("--start", type=float)
+    fifo.add_argument("--end", type=float)
+    fifo.add_argument("--output", required=True, type=Path)
+    fifo.add_argument("--max-file-mib", type=float, default=DEFAULT_MAX_FILE_MIB)
+    fifo.set_defaults(func=command_fifo)
+
+    native = sub.add_parser("native", help="export original topic samples without interpolation")
+    native.add_argument("log", type=Path)
+    native.add_argument("--topic", required=True)
+    native.add_argument("--instance", type=int, default=0)
+    native.add_argument("--field", dest="fields", action="append", required=True)
+    native.add_argument("--sample-timestamp", action="store_true",
+                        help="use timestamp_sample when present, else timestamp")
+    native.add_argument("--start", type=float)
+    native.add_argument("--end", type=float)
+    native.add_argument("--output", required=True, type=Path)
+    native.add_argument("--max-file-mib", type=float, default=DEFAULT_MAX_FILE_MIB)
+    native.set_defaults(func=command_native)
 
     health = sub.add_parser("health", help="summarize CPU, memory, dropouts, and low-stack warnings")
     health.add_argument("logs", type=Path, nargs="+")
