@@ -23,6 +23,7 @@ from uloglib import (
     SignalSpec,
     align_signals,
     available_schemas,
+    change_timeline,
     get_topic,
     load_topics,
     parameter_diff,
@@ -1357,6 +1358,30 @@ def command_recipe(args: argparse.Namespace) -> None:
 
 
 
+def command_timeline(args: argparse.Namespace) -> None:
+    """Return only observed discrete field changes; never label stability or causes."""
+    check_file_size(args.log, args.max_file_mib)
+    if not args.signals:
+        raise ValueError("at least one -s/--signal is required")
+    specs, _ = source_specs(args.signals, [], {}, "previous")
+    window = choose_window(args.log, args)
+    start_s, end_s = window if window is not None else (None, None)
+    topics = {item.topic for item in specs}
+    if any(item.instance == PRIMARY_INSTANCE for item in specs):
+        topics.add("sensors_status_imu")
+    log = load_topics(args.log, topics)
+    specs, resolved = resolve_primary_specs(log, specs, start_s=start_s, end_s=end_s)
+    ensure_unambiguous_instances(log, specs)
+    result = change_timeline(log, specs, start_s=start_s, end_s=end_s, on_missing="skip")
+    print_or_write({
+        "file": args.log.name, "requested_window_s": window,
+        "resolved_instances": resolved,
+        "missing": list(result.missing),
+        "events": [{"time_s": item.time_s, "signal": item.label, "value": item.value}
+                   for item in result.events],
+    }, args.output)
+
+
 def command_fifo(args: argparse.Namespace) -> None:
     """Export selected raw FIFO packets as physical-unit, native-rate samples."""
     if args.topic not in {"sensor_accel_fifo", "sensor_gyro_fifo"}:
@@ -1515,6 +1540,18 @@ def build_parser() -> argparse.ArgumentParser:
     spectrum.add_argument("--output")
     spectrum.set_defaults(func=command_spectrum, anti_alias=True)
 
+
+    timeline = sub.add_parser("timeline", help="list observed state transitions without inference")
+    timeline.add_argument("log", type=Path)
+    timeline.add_argument("-s", "--signal", dest="signals", action="append", required=True)
+    timeline.add_argument("--start", type=float)
+    timeline.add_argument("--end", type=float)
+    timeline.add_argument("--airborne", action="store_true")
+    timeline.add_argument("--armed", action="store_true")
+    timeline.add_argument("--mission", action="store_true")
+    timeline.add_argument("--output")
+    timeline.add_argument("--max-file-mib", type=float, default=DEFAULT_MAX_FILE_MIB)
+    timeline.set_defaults(func=command_timeline)
 
     fifo = sub.add_parser("fifo", help="export native samples from sensor_accel_fifo or sensor_gyro_fifo")
     fifo.add_argument("log", type=Path)
