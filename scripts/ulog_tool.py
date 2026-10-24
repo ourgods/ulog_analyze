@@ -283,7 +283,7 @@ def analyze(
     log = load_topics(path, topics)
     specs, resolved_instances = resolve_primary_specs(log, specs, start_s=start_s, end_s=end_s)
     ensure_unambiguous_instances(log, specs)
-    aligned = align_signals(log, specs, start_s=start_s, end_s=end_s, hz=args.rate, on_missing="skip")
+    aligned = align_signals(log, specs, start_s=start_s, end_s=end_s, hz=args.rate, on_missing="skip", anti_alias=getattr(args, "anti_alias", False))
     source_values = {
         spec.label: aligned.values[spec.label]
         for spec in specs
@@ -312,6 +312,7 @@ def analyze(
             None if window[1] is None else float(window[1]),
         ],
         "rate_hz": args.rate,
+        "anti_alias_before_downsampling": bool(getattr(args, "anti_alias", False)),
         "missing": missing,
         "sampling": aligned.sampling,
         "linear_interpolation_gap_policy": "do not bridge source gaps longer than five median source periods",
@@ -1278,14 +1279,59 @@ RECIPES = {
     "attitude-tracking": None,
     "horizontal-control": None,
     "vibration": None,
-    "gps-ekf": ["vehicle_local_position.vz", "vehicle_gps_position.vel_d_m_s", "estimator_innovations.gps_vvel", "estimator_innovation_test_ratios.gps_vvel"],
-    "motors": ["actuator_motors.control[0]", "actuator_motors.control[1]", "actuator_motors.control[2]", "actuator_motors.control[3]"],
+    "gps-ekf": [
+        "vehicle_local_position.x", "vehicle_local_position.y", "vehicle_local_position.z",
+        "vehicle_local_position.vx", "vehicle_local_position.vy", "vehicle_local_position.vz",
+        "vehicle_gps_position.vel_n_m_s", "vehicle_gps_position.vel_e_m_s",
+        "vehicle_gps_position.vel_d_m_s",
+        "estimator_innovations.gps_hpos[0]", "estimator_innovations.gps_hpos[1]",
+        "estimator_innovations.gps_hvel[0]", "estimator_innovations.gps_hvel[1]",
+        "estimator_innovations.gps_vvel",
+        "estimator_innovation_test_ratios.gps_hpos",
+        "estimator_innovation_test_ratios.gps_hvel",
+        "estimator_innovation_test_ratios.gps_vvel",
+    ],
+    "motors": None,
 }
+
+
+def command_motors_recipe(args: argparse.Namespace) -> None:
+    """Enumerate logged motor fields, rather than assuming four motors."""
+    check_file_size(args.log, args.max_file_mib)
+    fields = available_schemas(args.log).get("actuator_motors", [])
+    channel_fields = sorted(
+        (field for field in fields if re.fullmatch(r"control\[\d+\]", field)),
+        key=lambda field: int(field[8:-1]),
+    )
+    if not channel_fields:
+        raise ValueError(f"actuator_motors.control[] is absent in {args.log.name}")
+    local = argparse.Namespace(**vars(args))
+    local.signals = [f"actuator_motors.{field}" for field in channel_fields]
+    local.expressions = []
+    time_s, values, missing, metadata = analyze(
+        args.log, local.signals, [], load_aliases(args.alias_file), local
+    )
+    channels = {}
+    for name, array in values.items():
+        finite = int(np.count_nonzero(np.isfinite(array)))
+        channels[name] = {
+            "finite_samples": finite,
+            "stats": finite_stats(array, time_s) if finite else None,
+        }
+    print_or_write({
+        "recipe": "motors",
+        "metadata": compact_metadata(metadata, args.verbose),
+        "missing": list(missing),
+        "channels": channels,
+    }, args.output)
 
 
 def command_recipe(args: argparse.Namespace) -> None:
     if args.name not in RECIPES:
         raise ValueError(f"unknown recipe {args.name!r}; choose from {sorted(RECIPES)}")
+    if args.name == "motors":
+        command_motors_recipe(args)
+        return
     if args.name == "vibration":
         command_vibration_recipe(args)
         return
@@ -1389,7 +1435,7 @@ def build_parser() -> argparse.ArgumentParser:
     transfer.add_argument("--nperseg", type=int)
     transfer.add_argument("--min-segments", type=int, default=4)
     transfer.add_argument("--output")
-    transfer.set_defaults(func=command_transfer)
+    transfer.set_defaults(func=command_transfer, anti_alias=True)
 
     spectrum = sub.add_parser("spectrum", help="compare dominant frequency and band RMS across logs")
     spectrum.add_argument("logs", type=Path, nargs="+")
@@ -1400,7 +1446,7 @@ def build_parser() -> argparse.ArgumentParser:
     spectrum.add_argument("--nperseg", type=int)
     spectrum.add_argument("--min-segments", type=int, default=4)
     spectrum.add_argument("--output")
-    spectrum.set_defaults(func=command_spectrum)
+    spectrum.set_defaults(func=command_spectrum, anti_alias=True)
 
     health = sub.add_parser("health", help="summarize CPU, memory, dropouts, and low-stack warnings")
     health.add_argument("logs", type=Path, nargs="+")
